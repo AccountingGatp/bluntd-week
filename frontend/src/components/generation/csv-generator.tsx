@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Download, FileSpreadsheet, Upload } from "lucide-react";
+import Link from "next/link";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -96,7 +97,13 @@ export function CsvGenerator() {
         <p className="text-sm text-zinc-500">
           Upload a QuickBooks Time CSV. The API keeps it in memory, builds a
           Republic Supply Company general ledger, and returns the Excel file.
-          Nothing is saved on the server.
+          Nothing is saved on the server.{" "}
+          <Link
+            href="/sop"
+            className="font-medium text-employee-name underline-offset-2 hover:underline"
+          >
+            How to use
+          </Link>
         </p>
       </div>
 

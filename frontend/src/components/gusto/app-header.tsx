@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 const links = [
   { href: "/gusto", label: "Employees" },
   { href: "/generation", label: "Generation" },
+  { href: "/sop", label: "SOP" },
 ];
 
 export function AppHeader() {
