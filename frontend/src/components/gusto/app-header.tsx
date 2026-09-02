@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 
 const links = [
   { href: "/gusto", label: "Employees" },
+  { href: "/gusto-generation", label: "Gusto Generation" },
   { href: "/generation", label: "Generation" },
   { href: "/sop", label: "SOP" },
 ];

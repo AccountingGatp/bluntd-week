@@ -56,6 +56,7 @@ export type LedgerEmployee = {
   employerMedicare: number;
   employerTax: number;
   grossWages: number;
+  sickWages: number;
   rate: number;
   skipped: boolean;
   skipReason?: string;
@@ -401,6 +402,7 @@ function buildEmployees(
         employerMedicare: 0,
         employerTax: 0,
         grossWages: 0,
+        sickWages: 0,
         rate: 0,
         skipped: true,
         skipReason: "not in Gusto",
@@ -422,6 +424,7 @@ function buildEmployees(
         employerMedicare: 0,
         employerTax: 0,
         grossWages: 0,
+        sickWages: 0,
         rate: match.rate,
         skipped: true,
         skipReason: "monthly salary",
@@ -449,10 +452,23 @@ function buildEmployees(
       employerMedicare,
       employerTax: money(employerSs + employerMedicare),
       grossWages,
+      sickWages: 0,
       rate: match.rate,
       skipped: false,
     };
   });
+}
+
+function taxFromPaycheck(employee: LedgerEmployee | undefined, gross: number) {
+  const recomputed = employerFica(gross);
+  const storedSs = employee?.employerSs ?? 0;
+  const storedMedicare = employee?.employerMedicare ?? 0;
+  const storedTotal = money(storedSs + storedMedicare);
+  const recomputedTotal = money(recomputed.ss + recomputed.medicare);
+  if (storedTotal >= recomputedTotal && storedTotal > 0) {
+    return { ss: storedSs, medicare: storedMedicare };
+  }
+  return recomputed;
 }
 
 function writePersonCostBlock(
@@ -637,6 +653,152 @@ function writePersonCostBlock(
   sheet.getColumn(noteCol).width = 28;
 }
 
+export function addDerivedSheets(
+  workbook: ExcelJS.Workbook,
+  paid: LedgerEmployee[],
+) {
+  const wc = workbook.addWorksheet("WC");
+  wc.getColumn(1).width = 22;
+  wc.getColumn(2).width = 48;
+  wc.getColumn(3).width = 14;
+  applyHeaderRow(wc.getRow(1), [
+    "Account Type",
+    "Account Description",
+    "Debit",
+    null,
+    "Code",
+    "Regular Pay",
+    "Overtime",
+    "2/3 OT for WC",
+    "Total pay",
+    "Pay for ",
+    "WC Rate",
+  ]);
+  const wcClasses = [
+    { code: 4611, label: "Other than below mentioned", rate: DEFAULT_WC_RATE, regular: [] as string[], overtime: [] as string[] },
+    { code: 8810, label: "Carlos + Ryan", rate: CARLOS_WC_RATE, regular: [] as string[], overtime: [] as string[] },
+    { code: 8871, label: "Meaghan+Elysia", rate: ELYSIA_WC_RATE, regular: [] as string[], overtime: [] as string[] },
+    { code: 8742, label: "Joey", rate: JOEY_WC_RATE, regular: [] as string[], overtime: [] as string[] },
+  ];
+  let wcRow = 2;
+  for (const employee of paid) {
+    const key = employee.displayName.toLowerCase();
+    const bucket = key.includes("carlos silva")
+      ? wcClasses[1]
+      : key.includes("elysia castro")
+        ? wcClasses[2]
+        : wcClasses[0];
+    writeLine(
+      wc,
+      wcRow,
+      "RegularWages",
+      `Regular Wages for ${employee.displayName}`,
+      employee.regularWages,
+      null,
+    );
+    bucket.regular.push(`C${wcRow}`);
+    wcRow += 1;
+    if (employee.overtimeWages > 0 || employee.doubleOvertimeWages > 0) {
+      writeLine(
+        wc,
+        wcRow,
+        "OvertimeWages",
+        `Overtime Wages for ${employee.displayName}`,
+        money(employee.overtimeWages + employee.doubleOvertimeWages),
+        null,
+      );
+      bucket.overtime.push(`C${wcRow}`);
+      wcRow += 1;
+    }
+  }
+  for (const employee of paid) {
+    if (employee.sickWages <= 0) {
+      continue;
+    }
+    writeLine(
+      wc,
+      wcRow,
+      "SickTimeOff",
+      `Sick Time Off for ${employee.displayName}`,
+      employee.sickWages,
+      null,
+    );
+    const key = employee.displayName.toLowerCase();
+    const bucket = key.includes("carlos silva")
+      ? wcClasses[1]
+      : key.includes("elysia castro")
+        ? wcClasses[2]
+        : wcClasses[0];
+    bucket.regular.push(`C${wcRow}`);
+    wcRow += 1;
+  }
+  wcClasses.forEach((row, index) => {
+    const excelRow = 2 + index;
+    textCell(wc, excelRow, 5, row.code);
+    textCell(wc, excelRow, 10, row.label);
+    wc.getCell(excelRow, 11).value = row.rate;
+    formulaCell(wc, excelRow, 6, row.regular.join("+") || "0", { money: true });
+    formulaCell(wc, excelRow, 7, row.overtime.join("+") || "0", { money: true });
+    formulaCell(wc, excelRow, 8, `G${excelRow}*2/3`, { money: true });
+    formulaCell(wc, excelRow, 9, `F${excelRow}+H${excelRow}`, { money: true });
+  });
+
+  const hazel = paid.find((employee) => employee.displayName.toLowerCase().includes("hazel herrera"));
+  const elysia = paid.find((employee) =>
+    employee.displayName.toLowerCase().includes("elysia castro"),
+  );
+  const paul = paid.find((employee) => employee.displayName.toLowerCase().includes("paul bates"));
+
+  const hz = workbook.addWorksheet("HZ & EL");
+  const hazelRegular = money((hazel?.regularWages ?? 0) + (hazel?.sickWages ?? 0));
+  const hazelOvertime = money((hazel?.overtimeWages ?? 0) + (hazel?.doubleOvertimeWages ?? 0));
+  const hazelTax = taxFromPaycheck(
+    hazel,
+    money(hazelRegular + hazelOvertime),
+  );
+  writePersonCostBlock(hz, 1, {
+    regularLabel: "Hazel Regualr wages",
+    otLabel: "OT",
+    regular: hazelRegular,
+    overtime: hazelOvertime,
+    wcRate: wcRateFor("Hazel Herrera"),
+    wcNote: "As per Smartpay code 4611",
+    employerSs: hazelTax.ss,
+    employerMedicare: hazelTax.medicare,
+    serviceFee: false,
+    splits: false,
+  });
+  const elysiaRegular = elysia?.regularWages ?? 0;
+  const elysiaOvertime = money((elysia?.overtimeWages ?? 0) + (elysia?.doubleOvertimeWages ?? 0));
+  const elysiaTax = taxFromPaycheck(elysia, money(elysiaRegular + elysiaOvertime));
+  writePersonCostBlock(hz, 5, {
+    regularLabel: "Regular Wages for Elysia Castro",
+    otLabel: "Overtime Wages for Elysia Castro",
+    regular: elysiaRegular,
+    overtime: elysiaOvertime,
+    wcRate: wcRateFor("Elysia Castro"),
+    wcNote: "As per Righsum code 8871",
+    employerSs: elysiaTax.ss,
+    employerMedicare: elysiaTax.medicare,
+    serviceFee: false,
+    splits: false,
+  });
+
+  const paulSheet = workbook.addWorksheet("Paul");
+  writePersonCostBlock(paulSheet, 1, {
+    regularLabel: "Paul Regualr wages",
+    otLabel: "OT wage",
+    regular: paul?.regularWages ?? 0,
+    overtime: money((paul?.overtimeWages ?? 0) + (paul?.doubleOvertimeWages ?? 0)),
+    wcRate: wcRateFor("Paul Bates"),
+    employerSs: paul?.employerSs ?? 0,
+    employerMedicare: paul?.employerMedicare ?? 0,
+    serviceFee: true,
+    splits: true,
+  });
+  textCell(paulSheet, 22, 1, "*New Calculation");
+}
+
 export async function buildGeneralLedger(options: {
   hours: HoursRow[];
   directory: EmployeeJSON[];
@@ -648,6 +810,12 @@ export async function buildGeneralLedger(options: {
     employees.filter((employee) => !employee.skipped && employee.grossWages > 0),
   );
 
+  for (const employee of paid) {
+    if (employee.displayName.toLowerCase().includes("hazel herrera")) {
+      employee.sickWages = HAZEL_SICK_TIME_OFF;
+    }
+  }
+
   if (!paid.length) {
     throw new Error("No hourly employees with pay rates were found for this timesheet.");
   }
@@ -657,10 +825,7 @@ export async function buildGeneralLedger(options: {
   const doubleTotal = money(paid.reduce((sum, row) => sum + row.doubleOvertimeWages, 0));
   const ssTotal = money(paid.reduce((sum, row) => sum + row.employerSs, 0));
   const medicareTotal = money(paid.reduce((sum, row) => sum + row.employerMedicare, 0));
-  const includeHazelSick = paid.some((employee) =>
-    employee.displayName.toLowerCase().includes("hazel herrera"),
-  );
-  const sickTotal = includeHazelSick ? HAZEL_SICK_TIME_OFF : 0;
+  const sickTotal = money(paid.reduce((sum, row) => sum + row.sickWages, 0));
   const debitTotal = money(
     regularTotal + overtimeTotal + doubleTotal + ssTotal + medicareTotal + sickTotal,
   );
@@ -767,137 +932,7 @@ export async function buildGeneralLedger(options: {
   textCell(detailed, detailedRow, 3, debitTotal, { bold: true, money: true });
   textCell(detailed, detailedRow, 4, debitTotal, { bold: true, money: true });
 
-  const wc = workbook.addWorksheet("WC");
-  wc.getColumn(1).width = 22;
-  wc.getColumn(2).width = 48;
-  wc.getColumn(3).width = 14;
-  applyHeaderRow(wc.getRow(1), [
-    "Account Type",
-    "Account Description",
-    "Debit",
-    null,
-    "Code",
-    "Regular Pay",
-    "Overtime",
-    "2/3 OT for WC",
-    "Total pay",
-    "Pay for ",
-    "WC Rate",
-  ]);
-  const wcClasses = [
-    { code: 4611, label: "Other than below mentioned", rate: DEFAULT_WC_RATE, regular: [] as string[], overtime: [] as string[] },
-    { code: 8810, label: "Carlos + Ryan", rate: CARLOS_WC_RATE, regular: [] as string[], overtime: [] as string[] },
-    { code: 8871, label: "Meaghan+Elysia", rate: ELYSIA_WC_RATE, regular: [] as string[], overtime: [] as string[] },
-    { code: 8742, label: "Joey", rate: JOEY_WC_RATE, regular: [] as string[], overtime: [] as string[] },
-  ];
-  let wcRow = 2;
-  for (const employee of paid) {
-    const key = employee.displayName.toLowerCase();
-    const bucket = key.includes("carlos silva")
-      ? wcClasses[1]
-      : key.includes("elysia castro")
-        ? wcClasses[2]
-        : wcClasses[0];
-    writeLine(
-      wc,
-      wcRow,
-      "RegularWages",
-      `Regular Wages for ${employee.displayName}`,
-      employee.regularWages,
-      null,
-    );
-    bucket.regular.push(`C${wcRow}`);
-    wcRow += 1;
-    if (employee.overtimeWages > 0 || employee.doubleOvertimeWages > 0) {
-      writeLine(
-        wc,
-        wcRow,
-        "OvertimeWages",
-        `Overtime Wages for ${employee.displayName}`,
-        money(employee.overtimeWages + employee.doubleOvertimeWages),
-        null,
-      );
-      bucket.overtime.push(`C${wcRow}`);
-      wcRow += 1;
-    }
-  }
-  const hazelOnWc = paid.find((employee) =>
-    employee.displayName.toLowerCase().includes("hazel herrera"),
-  );
-  if (hazelOnWc) {
-    writeLine(
-      wc,
-      wcRow,
-      "SickTimeOff",
-      "Sick Time Off for Hazel Herrera",
-      HAZEL_SICK_TIME_OFF,
-      null,
-    );
-    wcClasses[0].regular.push(`C${wcRow}`);
-    wcRow += 1;
-  }
-  wcClasses.forEach((row, index) => {
-    const excelRow = 2 + index;
-    textCell(wc, excelRow, 5, row.code);
-    textCell(wc, excelRow, 10, row.label);
-    wc.getCell(excelRow, 11).value = row.rate;
-    formulaCell(wc, excelRow, 6, row.regular.join("+") || "0", { money: true });
-    formulaCell(wc, excelRow, 7, row.overtime.join("+") || "0", { money: true });
-    formulaCell(wc, excelRow, 8, `G${excelRow}*2/3`, { money: true });
-    formulaCell(wc, excelRow, 9, `F${excelRow}+H${excelRow}`, { money: true });
-  });
-
-  const hazel = paid.find((employee) => employee.displayName.toLowerCase().includes("hazel herrera"));
-  const elysia = paid.find((employee) =>
-    employee.displayName.toLowerCase().includes("elysia castro"),
-  );
-  const paul = paid.find((employee) => employee.displayName.toLowerCase().includes("paul bates"));
-
-  const hz = workbook.addWorksheet("HZ & EL");
-  const hazelRegular = money((hazel?.regularWages ?? 0) + (hazel ? HAZEL_SICK_TIME_OFF : 0));
-  const hazelOvertime = money((hazel?.overtimeWages ?? 0) + (hazel?.doubleOvertimeWages ?? 0));
-  const hazelTax = employerFica(money(hazelRegular + hazelOvertime));
-  writePersonCostBlock(hz, 1, {
-    regularLabel: "Hazel Regualr wages",
-    otLabel: "OT",
-    regular: hazelRegular,
-    overtime: hazelOvertime,
-    wcRate: wcRateFor("Hazel Herrera"),
-    wcNote: "As per Smartpay code 4611",
-    employerSs: hazelTax.ss,
-    employerMedicare: hazelTax.medicare,
-    serviceFee: false,
-    splits: false,
-  });
-  const elysiaRegular = elysia?.regularWages ?? 0;
-  const elysiaOvertime = money((elysia?.overtimeWages ?? 0) + (elysia?.doubleOvertimeWages ?? 0));
-  const elysiaTax = employerFica(money(elysiaRegular + elysiaOvertime));
-  writePersonCostBlock(hz, 5, {
-    regularLabel: "Regular Wages for Elysia Castro",
-    otLabel: "Overtime Wages for Elysia Castro",
-    regular: elysiaRegular,
-    overtime: elysiaOvertime,
-    wcRate: wcRateFor("Elysia Castro"),
-    wcNote: "As per Righsum code 8871",
-    employerSs: elysiaTax.ss,
-    employerMedicare: elysiaTax.medicare,
-    serviceFee: false,
-    splits: false,
-  });
-
-  const paulSheet = workbook.addWorksheet("Paul");
-  writePersonCostBlock(paulSheet, 1, {
-    regularLabel: "Paul Regualr wages",
-    otLabel: "OT wage",
-    regular: paul?.regularWages ?? 0,
-    overtime: money((paul?.overtimeWages ?? 0) + (paul?.doubleOvertimeWages ?? 0)),
-    wcRate: wcRateFor("Paul Bates"),
-    employerSs: paul?.employerSs ?? 0,
-    employerMedicare: paul?.employerMedicare ?? 0,
-    serviceFee: true,
-    splits: true,
-  });
-  textCell(paulSheet, 22, 1, "*New Calculation");
+  addDerivedSheets(workbook, paid);
 
   const buffer = await workbook.xlsx.writeBuffer();
   const fileBase64 = Buffer.from(buffer).toString("base64");
