@@ -240,11 +240,13 @@ function parseDetailedEmployees(sheet: ExcelJS.Worksheet) {
 }
 
 export async function completeGustoLedger(
-  file: Buffer,
+  file: Uint8Array,
   filename?: string,
 ): Promise<LedgerResult> {
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(file);
+  await workbook.xlsx.load(
+    file as unknown as Parameters<ExcelJS.Xlsx["load"]>[0],
+  );
 
   const basic = findSheet(workbook, "Basic");
   const detailed = findSheet(workbook, "Detailed");
