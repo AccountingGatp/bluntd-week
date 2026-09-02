@@ -60,8 +60,8 @@ export function SopGuide() {
           SOP
         </h1>
         <p className="text-sm text-zinc-500">
-          How to turn a QuickBooks Time timesheet into a Republic Supply Company
-          general ledger.
+          How to run weekly payroll files: QBO from QuickBooks Time, and the
+          Gusto general ledger from Basic + Detailed.
         </p>
       </div>
 
@@ -83,6 +83,49 @@ export function SopGuide() {
             Gusto Basic + Detailed.xlsx
             <span className="mx-2 text-zinc-400">→</span>
             general_ledger_republic-supply-company_2026-08-28.xlsx
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>QBO Generation</CardTitle>
+          <CardDescription>
+            Build the weekly QuickBooks workbook from the timesheet CSV.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm text-zinc-700">
+          <ol className="list-decimal space-y-2 pl-5">
+            <li>
+              Export{" "}
+              <code className="rounded bg-zinc-100 px-1 font-mono text-[13px]">
+                timesheet_report_YYYY-MM-DD_thru_YYYY-MM-DD.csv
+              </code>{" "}
+              from QuickBooks Time.
+            </li>
+            <li>
+              Open{" "}
+              <Link
+                href="/qbo-generation"
+                className="font-medium text-employee-name underline-offset-2 hover:underline"
+              >
+                QBO Generation
+              </Link>
+              , upload the CSV, and generate.
+            </li>
+            <li>
+              Download{" "}
+              <code className="rounded bg-zinc-100 px-1 font-mono text-[13px]">
+                Week MM.DD.YYYY to MM.DD.YYYY.xlsx
+              </code>
+              . Sheets: Summary, Data, Overtime Calculation, RSC and REST,
+              Hourly Rates.
+            </li>
+          </ol>
+          <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 font-mono text-xs text-zinc-700">
+            timesheet_report_2026-08-17_thru_2026-08-23.csv
+            <span className="mx-2 text-zinc-400">→</span>
+            Week 08.17.2026 to 08.23.2026.xlsx
           </div>
         </CardContent>
       </Card>

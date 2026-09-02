@@ -3,6 +3,7 @@ import multer from "multer";
 
 import { completeGustoLedger } from "../lib/gusto-import.js";
 import { buildGeneralLedger } from "../lib/ledger.js";
+import { buildQboWorkbook } from "../lib/qbo.js";
 import { generateHoursFromTimesheet } from "../lib/timesheet.js";
 import { Employee, toEmployeeJSON } from "../models/employee.js";
 
@@ -62,6 +63,33 @@ generateRouter.post("/", csvUpload.single("file"), async (req, res) => {
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Could not generate the ledger";
+    res.status(400).json({ error: message });
+  }
+});
+
+generateRouter.post("/qbo", csvUpload.single("file"), async (req, res) => {
+  if (!req.file) {
+    res.status(400).json({ error: "Upload a QuickBooks Time CSV file" });
+    return;
+  }
+
+  try {
+    const directory = (await Employee.find()).map(toEmployeeJSON);
+    const workbook = await buildQboWorkbook(
+      req.file.buffer.toString("utf8"),
+      req.file.originalname,
+      directory,
+    );
+    res.json({
+      filename: workbook.filename,
+      checkDate: workbook.checkDate,
+      period: workbook.period,
+      fileBase64: workbook.fileBase64,
+      employees: workbook.employees,
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Could not generate the QBO workbook";
     res.status(400).json({ error: message });
   }
 });
