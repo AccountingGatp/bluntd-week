@@ -3,7 +3,7 @@ import { SopGuide } from "@/components/sop/sop-guide";
 
 export const metadata = {
   title: "SOP | Gusto",
-  description: "How to generate the Republic Supply Company general ledger",
+  description: "How to run QBO Generation and Gusto Generation each pay week",
 };
 
 export default function SopPage() {
