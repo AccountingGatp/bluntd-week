@@ -182,6 +182,11 @@ function titleCaseName(name: string) {
   return name.replace(/\b([a-z])/g, (letter) => letter.toUpperCase());
 }
 
+function writeTotalCell(cell: ExcelJS.Cell, range: string, result: number) {
+  cell.value = result === 0 ? 0 : { formula: `SUM(${range})`, result };
+  cell.font = { bold: true };
+}
+
 function rscEmployeeNames(punches: Punch[]) {
   return uniqueNames(punches).filter((name) =>
     punches.some((row) => row.fullName === name && isRsc(row.jobcode1)),
@@ -462,6 +467,28 @@ function writeOvertimeSheet(
     };
   });
 
+  if (days.length) {
+    const totalRow = days.length + 2;
+    const last = days.length + 1;
+    const hours = roundHours(days.reduce((sum, day) => sum + day.hours, 0));
+    const regular = roundHours(
+      days.reduce((sum, day) => sum + Math.min(roundHours(day.hours), 8), 0),
+    );
+    const overtime = roundHours(
+      days.reduce((sum, day) => {
+        const total = roundHours(day.hours);
+        return sum + (total <= 8 ? 0 : Math.min(total - 8, 4));
+      }, 0),
+    );
+    const doubleOvertime = roundHours(hours - regular - overtime);
+    sheet.getCell(totalRow, 1).value = "Grand Total";
+    sheet.getCell(totalRow, 1).font = { bold: true };
+    writeTotalCell(sheet.getCell(totalRow, 3), `C2:C${last}`, hours);
+    writeTotalCell(sheet.getCell(totalRow, 4), `D2:D${last}`, regular);
+    writeTotalCell(sheet.getCell(totalRow, 5), `E2:E${last}`, overtime);
+    writeTotalCell(sheet.getCell(totalRow, 6), `F2:F${last}`, doubleOvertime);
+  }
+
   return days;
 }
 
@@ -487,6 +514,14 @@ function writeRscSheet(
   sheet.getColumn(3).width = 18;
 
   const rscNames = rscEmployeeNames(punches);
+  const totals = {
+    rscHours: 0,
+    restHours: 0,
+    hours: 0,
+    rscPay: 0,
+    restPay: 0,
+    pay: 0,
+  };
 
   rscNames.forEach((name, index) => {
     const row = index + 2;
@@ -501,24 +536,34 @@ function writeRscSheet(
         .reduce((sum, punch) => sum + punch.hours, 0),
     );
     const rate = rateFor(name, rates);
+    const rscPay = money(rscHours * rate);
+    const restPay = money(restHours * rate);
+    const hours = roundHours(rscHours + restHours);
+    const pay = money(rscPay + restPay);
+    totals.rscHours = roundHours(totals.rscHours + rscHours);
+    totals.restHours = roundHours(totals.restHours + restHours);
+    totals.hours = roundHours(totals.hours + hours);
+    totals.rscPay = money(totals.rscPay + rscPay);
+    totals.restPay = money(totals.restPay + restPay);
+    totals.pay = money(totals.pay + pay);
     sheet.getCell(row, 1).value = titleCaseName(name);
     sheet.getCell(row, 2).value = rscHours;
     sheet.getCell(row, 3).value = restHours;
     sheet.getCell(row, 4).value = {
       formula: `B${row}+C${row}`,
-      result: roundHours(rscHours + restHours),
+      result: hours,
     };
     sheet.getCell(row, 5).value = {
       formula: `PRODUCT(VLOOKUP(A${row},'Hourly Rates'!B:C,2,0),B${row})`,
-      result: money(rscHours * rate),
+      result: rscPay,
     };
     sheet.getCell(row, 6).value = {
       formula: `PRODUCT(VLOOKUP(A${row},'Hourly Rates'!B:C,2,0),C${row})`,
-      result: money(restHours * rate),
+      result: restPay,
     };
     sheet.getCell(row, 7).value = {
       formula: `E${row}+F${row}`,
-      result: money(rscHours * rate + restHours * rate),
+      result: pay,
     };
   });
 
@@ -527,12 +572,12 @@ function writeRscSheet(
     const last = rscNames.length + 1;
     sheet.getCell(totalRow, 1).value = "Grand Total";
     sheet.getCell(totalRow, 1).font = { bold: true };
-    for (const col of [2, 3, 4, 5, 6, 7]) {
-      const letter = String.fromCharCode(64 + col);
-      const cell = sheet.getCell(totalRow, col);
-      cell.value = { formula: `SUM(${letter}2:${letter}${last})` };
-      cell.font = { bold: true };
-    }
+    writeTotalCell(sheet.getCell(totalRow, 2), `B2:B${last}`, totals.rscHours);
+    writeTotalCell(sheet.getCell(totalRow, 3), `C2:C${last}`, totals.restHours);
+    writeTotalCell(sheet.getCell(totalRow, 4), `D2:D${last}`, totals.hours);
+    writeTotalCell(sheet.getCell(totalRow, 5), `E2:E${last}`, totals.rscPay);
+    writeTotalCell(sheet.getCell(totalRow, 6), `F2:F${last}`, totals.restPay);
+    writeTotalCell(sheet.getCell(totalRow, 7), `G2:G${last}`, totals.pay);
   }
 
   return rscNames;
@@ -565,12 +610,16 @@ function writeSummary(
     sheet.getCell(cell).font = { bold: true };
   });
 
+  let gustoHours = 0;
+  let gustoPay = 0;
   gustoNames.forEach((name, index) => {
     const rows = punches.filter(
       (punch) => punch.fullName === name && !isLunch(punch.jobcode1) && !isRsc(punch.jobcode1),
     );
     const hours = roundHours(rows.reduce((sum, row) => sum + row.hours, 0));
     const pay = money(hours * rateFor(name, rates));
+    gustoHours = roundHours(gustoHours + hours);
+    gustoPay = money(gustoPay + pay);
     const excelRow = index + 4;
     sheet.getCell(excelRow, 2).value = name;
     sheet.getCell(excelRow, 3).value = hours;
@@ -579,14 +628,10 @@ function writeSummary(
   const gustoTotalRow = gustoNames.length + 4;
   sheet.getCell(gustoTotalRow, 2).value = "Grand Total";
   sheet.getCell(gustoTotalRow, 2).font = { bold: true };
-  sheet.getCell(gustoTotalRow, 3).value = {
-    formula: `SUM(C4:C${gustoTotalRow - 1})`,
-  };
-  sheet.getCell(gustoTotalRow, 4).value = {
-    formula: `SUM(D4:D${gustoTotalRow - 1})`,
-  };
-  sheet.getCell(gustoTotalRow, 3).font = { bold: true };
-  sheet.getCell(gustoTotalRow, 4).font = { bold: true };
+  if (gustoNames.length) {
+    writeTotalCell(sheet.getCell(gustoTotalRow, 3), `C4:C${gustoTotalRow - 1}`, gustoHours);
+    writeTotalCell(sheet.getCell(gustoTotalRow, 4), `D4:D${gustoTotalRow - 1}`, gustoPay);
+  }
 
   sheet.getCell("F1").value = "RSC Hours";
   sheet.getCell("F1").font = { bold: true };
@@ -596,17 +641,29 @@ function writeSummary(
   ["F3", "G3", "H3"].forEach((cell) => {
     sheet.getCell(cell).font = { bold: true };
   });
+  let rscHoursTotal = 0;
+  let rscPayTotal = 0;
   rscNames.forEach((name, index) => {
     const hours = roundHours(
       punches
         .filter((punch) => punch.fullName === name && isRsc(punch.jobcode1))
         .reduce((sum, punch) => sum + punch.hours, 0),
     );
+    const pay = money(hours * rateFor(name, rates));
+    rscHoursTotal = roundHours(rscHoursTotal + hours);
+    rscPayTotal = money(rscPayTotal + pay);
     const excelRow = index + 4;
     sheet.getCell(excelRow, 6).value = titleCaseName(name);
     sheet.getCell(excelRow, 7).value = hours;
-    sheet.getCell(excelRow, 8).value = money(hours * rateFor(name, rates));
+    sheet.getCell(excelRow, 8).value = pay;
   });
+  if (rscNames.length) {
+    const rscTotalRow = rscNames.length + 4;
+    sheet.getCell(rscTotalRow, 6).value = "Grand Total";
+    sheet.getCell(rscTotalRow, 6).font = { bold: true };
+    writeTotalCell(sheet.getCell(rscTotalRow, 7), `G4:G${rscTotalRow - 1}`, rscHoursTotal);
+    writeTotalCell(sheet.getCell(rscTotalRow, 8), `H4:H${rscTotalRow - 1}`, rscPayTotal);
+  }
 
   sheet.getCell("J1").value = "RSC/OF by Job";
   sheet.getCell("J1").font = { bold: true };
@@ -637,18 +694,30 @@ function writeSummary(
       });
     }
   }
-  [...jobs.values()]
-    .sort((left, right) => {
-      const job = left.job.localeCompare(right.job);
-      return job !== 0 ? job : left.sub.localeCompare(right.sub);
-    })
-    .forEach((row, index) => {
-      const excelRow = index + 4;
-      sheet.getCell(excelRow, 10).value = row.job;
-      sheet.getCell(excelRow, 11).value = row.sub;
-      sheet.getCell(excelRow, 12).value = roundHours(row.hours);
-      sheet.getCell(excelRow, 13).value = money(row.pay);
-    });
+  const jobRows = [...jobs.values()].sort((left, right) => {
+    const job = left.job.localeCompare(right.job);
+    return job !== 0 ? job : left.sub.localeCompare(right.sub);
+  });
+  let jobHours = 0;
+  let jobPay = 0;
+  jobRows.forEach((row, index) => {
+    const hours = roundHours(row.hours);
+    const pay = money(row.pay);
+    jobHours = roundHours(jobHours + hours);
+    jobPay = money(jobPay + pay);
+    const excelRow = index + 4;
+    sheet.getCell(excelRow, 10).value = row.job;
+    sheet.getCell(excelRow, 11).value = row.sub;
+    sheet.getCell(excelRow, 12).value = hours;
+    sheet.getCell(excelRow, 13).value = pay;
+  });
+  if (jobRows.length) {
+    const jobTotalRow = jobRows.length + 4;
+    sheet.getCell(jobTotalRow, 10).value = "Grand Total";
+    sheet.getCell(jobTotalRow, 10).font = { bold: true };
+    writeTotalCell(sheet.getCell(jobTotalRow, 12), `L4:L${jobTotalRow - 1}`, jobHours);
+    writeTotalCell(sheet.getCell(jobTotalRow, 13), `M4:M${jobTotalRow - 1}`, jobPay);
+  }
 
   sheet.getCell("B13").value =
     "*The Rest break hours are added to checks as advised by the client.";
@@ -687,16 +756,54 @@ function writeSummary(
       });
     }
   }
-  [...overtimeByName.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .forEach(([name, totals], index) => {
-      const excelRow = index + 27;
-      sheet.getCell(excelRow, 2).value = name;
-      sheet.getCell(excelRow, 3).value = roundHours(totals.hours);
-      sheet.getCell(excelRow, 4).value = roundHours(totals.regular);
-      sheet.getCell(excelRow, 5).value = roundHours(totals.overtime);
-      sheet.getCell(excelRow, 6).value = roundHours(totals.double);
-    });
+  const overtimeRows = [...overtimeByName.entries()].sort(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  let overtimeHours = 0;
+  let overtimeRegular = 0;
+  let overtimeOt = 0;
+  let overtimeDouble = 0;
+  overtimeRows.forEach(([name, totals], index) => {
+    const hours = roundHours(totals.hours);
+    const regular = roundHours(totals.regular);
+    const overtime = roundHours(totals.overtime);
+    const doubleOvertime = roundHours(totals.double);
+    overtimeHours = roundHours(overtimeHours + hours);
+    overtimeRegular = roundHours(overtimeRegular + regular);
+    overtimeOt = roundHours(overtimeOt + overtime);
+    overtimeDouble = roundHours(overtimeDouble + doubleOvertime);
+    const excelRow = index + 27;
+    sheet.getCell(excelRow, 2).value = name;
+    sheet.getCell(excelRow, 3).value = hours;
+    sheet.getCell(excelRow, 4).value = regular;
+    sheet.getCell(excelRow, 5).value = overtime;
+    sheet.getCell(excelRow, 6).value = doubleOvertime;
+  });
+  if (overtimeRows.length) {
+    const overtimeTotalRow = overtimeRows.length + 27;
+    sheet.getCell(overtimeTotalRow, 2).value = "Grand Total";
+    sheet.getCell(overtimeTotalRow, 2).font = { bold: true };
+    writeTotalCell(
+      sheet.getCell(overtimeTotalRow, 3),
+      `C27:C${overtimeTotalRow - 1}`,
+      overtimeHours,
+    );
+    writeTotalCell(
+      sheet.getCell(overtimeTotalRow, 4),
+      `D27:D${overtimeTotalRow - 1}`,
+      overtimeRegular,
+    );
+    writeTotalCell(
+      sheet.getCell(overtimeTotalRow, 5),
+      `E27:E${overtimeTotalRow - 1}`,
+      overtimeOt,
+    );
+    writeTotalCell(
+      sheet.getCell(overtimeTotalRow, 6),
+      `F27:F${overtimeTotalRow - 1}`,
+      overtimeDouble,
+    );
+  }
 }
 
 export async function buildQboWorkbook(
@@ -708,6 +815,7 @@ export async function buildQboWorkbook(
   const rates = mergeRates(directory, punches);
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Bluntd";
+  workbook.calcProperties.fullCalcOnLoad = true;
 
   const summary = workbook.addWorksheet("Summary");
   const data = workbook.addWorksheet("Data");
